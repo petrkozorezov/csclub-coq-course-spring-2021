@@ -17,10 +17,11 @@ constants (natural numbers) and arbitrarily nested additions, subtractions and
 multiplications *)
 Inductive expr : Type :=
 | Const of nat
-| Plus of expr & expr
-| Minus of ...
-| Mult of ...
+| Plus  of expr & expr
+| Minus of expr & expr
+| Mult  of expr & expr
 .
+
 
 (** Let us define a special notation for our language.
     We reuse the standard arithmetic notations here, but only inside
@@ -45,8 +46,8 @@ Notation "x + y" := (Plus x y) (in custom expr at level 2, left associativity).
 (* Define notations for subtraction and multiplication.
    Hint: lower level means higher priority.
    Your notations should start with `in custom expr` as above. *)
-Notation "x - y" := ...
-Notation "x * y" := ...
+Notation "x - y" := (Minus x y) (in custom expr at level 2, left associativity).
+Notation "x * y" := (Mult x y) (in custom expr at level 1, left associativity).
 
 (** Here is how we write Plus (Const 0) (Plus (Const 1) (Const 2)) *)
 Check [[
@@ -76,18 +77,22 @@ Check [[
 Basically, the semantics of the expression language should be the same as
 the corresponding Coq functions `addn`, `subn`, `muln`. *)
 Fixpoint eval (e : expr) : nat :=
-  ...
+  match e with
+  | Const  x     => x
+  | Plus   e1 e2 => eval e1 + eval e2
+  | Minus  e1 e2 => eval e1 - eval e2
+  | Mult   e1 e2 => eval e1 * eval e2
+  end.
 
 (** Some unit tests *)
 (** We haven't discussed in depth what `erefl` means yet.
     But for now, let's just assume if the following lines
     typecheck then the equalities below hold *)
-Check erefl : eval [[ 0 - 4 ]] = 0.
+Check erefl : eval [[ 0 - 4       ]] = 0.
 Check erefl : eval [[ 0 + (2 - 1) ]] = 1.
 Check erefl : eval [[ (0 + 1) + 2 ]] = 3.
-Check erefl : eval [[ 2 + 2 * 2 ]] = 6.
+Check erefl : eval [[ 2 + 2 * 2   ]] = 6.
 Check erefl : eval [[ (2 + 2) * 2 ]] = 8.
-...
 
 
 (** * Compiling arithmetic expressions to a stack language *)
@@ -111,6 +116,7 @@ For example, this is one possible way to start:
 
 Notation " << n >> " := (Push n) (at level 0, n constr).
 *)
+Notation " << n >> " := (Push n) (at level 0, n constr).
 
 
 (* Feel free to either define your own datatype to represent lists or reuse the
@@ -136,28 +142,55 @@ And the type of stacks like so:
     Definition stack := seq nat.
 *)
 
+Definition prog := seq instr.
+Definition stack := seq nat.
 
 (** The [run] function is an interpreter for the stack language. It takes a
  program (list of instructions) and the current stack, and processes the program
  instruction-by-instruction, returning the final stack. *)
+
+(* ask about :: s' *)
+Definition apply (i : instr) (s : stack) : stack :=
+  match i, s with
+  | (Push n), _            =>  n      :: s
+  | Add     , b :: a :: s' => (a + b) :: s'
+  | Sub     , b :: a :: s' => (a - b) :: s'
+  | Mul     , b :: a :: s' => (a * b) :: s'
+  | _       , _            =>            s
+  end.
+
 Fixpoint run (p : prog) (s : stack) : stack :=
-  ...
+  match p with
+  | [::]    => s
+  | i :: p' => run p' (apply i s)
+  end.
 
 (** Unit tests: *)
 Check erefl :
-  run [:: ... stack-program ...] [::] = [:: ... stack-of-numbers ...].
-...
+  run [:: (Push 1 ); Sub] [::2] = [:: 1].
+
 
 
 (** Now, implement a compiler from "high-level" expressions to "low-level" stack
 programs and do some unit tests. *)
+
 Fixpoint compile (e : expr) : prog :=
-  ...
+  match e with
+  | Const n    => [::Push n]
+  | Plus  e1 e2 => compile e1 ++ compile e2 ++ [:: Add]
+  | Minus e1 e2 => compile e1 ++ compile e2 ++ [:: Sub]
+  | Mult  e1 e2 => compile e1 ++ compile e2 ++ [:: Mul]
+  end.
 
 (** Do some unit tests *)
+Compute compile [[ 2 + 2 * 2]].
 Check erefl :
-  compile [[ ... expression ... ]] = [:: ... stack-program ].
-...
+  compile [[ 2 - 1 ]] = [:: Push 2; Push 1; Sub ].
+Compute run (compile [[ 2 + 2 * 2 ]]) [::].
+Compute [:: 6].
+Check erefl :
+  run (compile [[ 2 + 2 * 2 ]]) [::] = [:: 6].
+
 (* Some ideas for unit tests:
   - check that `run (compile e) [::] = [:: eval e]`, where `e` is an arbitrary expression;
   - check that `compile` is an injective function
@@ -170,13 +203,40 @@ Check erefl :
 expression *)
 (* Hint: you might want to introduce a recursive helper function `decompile'` to
  reuse it for `decompile`. *)
+
+(* ask some == Some but none =/= None *)
+
+Definition exprs := seq expr.
+Definition decompile_one (i : instr) (acc : exprs) : option exprs :=
+  match i, acc with
+  | (Push n), _                => Some ((Const n    )::acc)
+  |  Add    , e1 :: e2 :: acc' => Some ((Plus  e1 e2)::acc')
+  |  Sub    , e1 :: e2 :: acc' => Some ((Minus e1 e2)::acc')
+  |  Mul    , e1 :: e2 :: acc' => Some ((Mult  e1 e2)::acc')
+  | _       , _                => None
+  end.
+
+Fixpoint decompile_acc (p : prog) (acc : exprs) : option exprs :=
+  match p with
+  | [ :: ]  => Some acc
+  | i :: p' =>
+    match decompile_one i acc with
+    | Some acc' => decompile_acc p' acc'
+    | None      => None
+    end
+  end.
+
 Definition decompile (p : prog) : option expr :=
-  ...
+  match decompile_acc p [::] with
+  | Some [:: e] => Some e
+  | _           => None
+  end.
 
 (** Unit tests *)
+
+Compute decompile (compile [[ 2 + 2 * 2 ]]).
 Check erefl :
-  decompile [:: ... stack-program ] = some [[ expression ]].
-...
+  decompile (compile [[ 2 + 2 * 2 ]]) = Some [[ 2 * 2 + 2 ]].
 
 (* Some ideas for unit tests:
   - check that `decompile (compile e) = Some e`, where `e` is an arbitrary expression
